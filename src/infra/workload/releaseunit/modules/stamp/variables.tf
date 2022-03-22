@@ -107,6 +107,11 @@ variable "global_storage_account_name" {
   type        = string
 }
 
+variable "global_redis_name"{
+  description = "Name of the globally shared redis cache, which is used to store responses from APIM"
+  type        = string
+}
+
 variable "api_key" {
   description = "API Key for protecting sensitive APIs in the CatalogService"
   type        = string

@@ -10,6 +10,11 @@ data "azurerm_cosmosdb_account" "global" {
   resource_group_name = var.global_resource_group_name
 }
 
+data "azurerm_redis_enterprise_cluster" "global" {
+  name                = var.global_redis_name
+  resource_group_name = var.global_resource_group_name
+}
+
 data "azurerm_container_registry" "global" {
   name                = var.acr_name
   resource_group_name = var.global_resource_group_name
