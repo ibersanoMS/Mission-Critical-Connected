@@ -47,6 +47,95 @@ You want to turn off zone redundancy for Cosmos DB. Go to [cosmosdb.tf](/src/inf
   7. Go to the [key vault secrets file](/src/infra/workload/releaseunit/modules/stamp/keyvault-secrets.tf). Copy the secret definition for `CosmosDb-DatabaseName`. Replace the secret name with `CosmosDb-Inventory-DatabaseName` and the value with `var.cosmosdb_inventory_database_name`.
   8. Go to the [ADO full release pipeline YAML file](/.ado/pipelines/templates/stages-full-release.yaml). Duplicate the var definition for the database name and add replace the cosmosdb references with the names for your new database. 
 
+## Redis Cache
+  You want to add Redis Enterprise - You need to add new redisCache terraform script as part of global resources and edit all the files that contain variables or variable references for redis database for each stamp. Below are in-detail steps to include redis cache enterprise creation as part of deployment pipeline
+
+  1. Add redisCache.tf terraform script file (sample script file: [redisCache.tf](/docs/example-code/redisCache.tf) )  to be part of the [global resources folder](src\infra\workload\globalresources).
+  2. Modify [global datasources file](src\infra\workload\globalresources\datasources.tf) to add new datasource for redis enterprise cache cluster as below for default/first location(if supporting multiple stamp deployments) to get the cluster id. 
+  ```
+  data "azurerm_redis_enterprise_database" "global" {
+  name                = "default"
+  resource_group_name = azurerm_resource_group.global.name
+  cluster_id          = azurerm_redis_enterprise_cluster.global_replicas[var.stamps[0]].id
+}
+  ```
+  3. Add new variable to the [variables.tf](src\infra\workload\globalresources\variables.tf) file to hold the redis database cluster id.
+  ```
+  variable "redis_enterprise_database_id" {
+  description = "Azure Cache for Redis Enterprise Id"
+  type        = string
+  default     = ""
+}
+```
+4. Add created variable to existing customAttributes section in file [stages-full-release.yaml](.ado\pipelines\templates\stages-full-release.yaml) include in as part of both the template sections steps-terraform-apply.yaml and steps-terraform-destroy.yaml:
+```
+-var=redis_enterprise_database_id="$(redis_enterprise_database_id)"
+```
+5. Add new holding property as below in [stamp.tf](src\infra\workload\releaseunit\stamp.tf) file as part of the release unit resources.
+```
+redis_enterprise_database_id = var.redis_enterprise_database_id
+```
+6. Add new variable to the [variables.tf](src\infra\workload\releaseunit\variables.tf)  and also to [stamp variables.tf](src\infra\workload\releaseunit\modules\stamp\variables.tf) file part of [releaseunit](src\infra\workload\releaseunit) & [stamp folder](src\infra\workload\releaseunit\modules\stamp).
+```
+variable "redis_enterprise_database_id" {
+  description = "Azure Cache for Redis Enterprise Id"
+  type        = string
+}
+```
+7. Modify [release unit stamp datasources file](src\infra\workload\releaseunit\modules\stamp\datasources.tf) to add new datasource for redis enterprise cache cluster as below to get the cluster id that got created as part of the global resource with the specific stamp location. 
+  ```
+  data "azurerm_redis_enterprise_database" "main" {
+  name                = "default"
+  resource_group_name = var.global_resource_group_name
+  cluster_id          = replace(var.redis_enterprise_database_id, "location", var.location)
+}
+  ```
+  8. Need to create private endpoint for redis enterprise cluster as part of each stamp deployment. Modify private endpoint terraform file with below content.
+  ```
+  #### Private Endpoint related resources for Redis Enterprise
+resource "azurerm_private_dns_zone" "redisEnterprise" {
+  name                = "privatelink.redisenterprise.cache.azure.net"
+  resource_group_name = azurerm_resource_group.stamp.name
+
+  tags = var.default_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "redisEnterprise" {
+  name                  = "redisEnterprise-private-dns-link"
+  resource_group_name   = azurerm_resource_group.stamp.name
+  private_dns_zone_name = azurerm_private_dns_zone.redisEnterprise.name
+  virtual_network_id    = data.azurerm_virtual_network.stamp.id
+}
+
+resource "azurerm_private_endpoint" "redisEnterprise" {
+  name                = "${local.prefix}-${local.location_short}-redisEnterprise-pe"
+  location            = azurerm_resource_group.stamp.location
+  resource_group_name = azurerm_resource_group.stamp.name
+  subnet_id           = azurerm_subnet.private_endpoints.id
+
+  private_dns_zone_group {
+    name                 = "privatednsredisEnterprise"
+    private_dns_zone_ids = [azurerm_private_dns_zone.redisEnterprise.id]
+  }
+
+  private_service_connection {
+    name                           = "redisEnterprise-privateserviceconnection"
+    private_connection_resource_id = replace(var.redis_enterprise_database_id, "location", var.location)
+    is_manual_connection           = false
+    subresource_names              = ["redisEnterprise"]
+  }
+
+  tags = var.default_tags
+}
+```
+ 9. Add new secret in [keyvaults-secrets.tf](src\infra\workload\releaseunit\modules\stamp\keyvault-secrets.tf) to hold the redis cache primary connection key, host name and port number.
+ ```  
+"Redis-Key"                                  = data.azurerm_redis_enterprise_database.main.primary_access_key
+    "Redis-Port-Number"                          = "10000"
+    "Redis-Host-Name"                            = "${var.prefix}${var.suffix}-${azurerm_resource_group.stamp.location}-redis.${azurerm_resource_group.stamp.location}.redisenterprise.cache.azure.net"
+```
+
+
 ## Modifying Application Code
 
 For information on the sample application included in the Azure Mission-Critical reference implementation, check out the documentation [here](/docs/reference-implementation/AppDesign-Application-Design.md).
@@ -98,4 +187,3 @@ Each time you submit a PR, it will be subject to the following rules:
   1. You must deploy your code into the e2e environment successfully before the PR can be approved. 
   2. Once it is successful and you have resolved all comments in your PR, you need to run your deployment pipeline again on your branch and destroy the infrastructure.
   3. Once the infrastructure has been successfully destroyed and your PR has been approved, the PR can be completed and your branch should be deleted.
-
